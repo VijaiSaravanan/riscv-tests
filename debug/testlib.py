@@ -18,6 +18,8 @@ import yaml
 
 print_log_names = False
 real_stdout = sys.stdout
+global sim_flag
+sim_flag=[]
 
 # Note that gdb comes with its own testsuite. I was unable to figure out how to
 # run that testsuite against the spike simulator.
@@ -180,7 +182,205 @@ class Spike:
         if halted:
             cmd.append('-H')
         if with_jtag_gdb:
-            cmd += ['--rbb-port', '0']
+            cmd += ['--rbb-port', '10000']
+            os.environ['REMOTE_BITBANG_HOST'] = 'localhost'
+
+        return cmd
+
+    def __del__(self):
+        if self.process:
+            try:
+                self.process.kill()
+                self.process.wait()
+            except OSError:
+                pass
+
+    def wait(self, *args, **kwargs):
+        return self.process.wait(*args, **kwargs)
+
+class Cclass:
+    # pylint: disable=too-many-instance-attributes
+    # pylint: disable=too-many-locals
+    def __init__(self, target, halted=False, timeout=None, with_jtag_gdb=True,
+                 isa=None, progbufsize=None, dmi_rti=None, abstract_rti=None,
+                 support_hasel=True, support_abstract_csr=True,
+                 support_haltgroups=True, vlen=128, elen=64, harts=None):
+        """Launch cclass. Return tuple of its process and the port it's running on."""
+
+        self.process = None
+        self.isa = isa
+        self.progbufsize = progbufsize
+        self.dmi_rti = dmi_rti
+        self.abstract_rti = abstract_rti
+        self.support_abstract_csr = support_abstract_csr
+        self.support_hasel = support_hasel
+        self.support_haltgroups = support_haltgroups
+        self.vlen = vlen
+        self.elen = elen
+
+        self.harts = harts or target.harts or [target]
+
+        cmd = self.command(target, halted, timeout, with_jtag_gdb)
+
+        self.infinite_loop = target.compile(
+            self.harts[0],
+            "programs/checksum.c",
+            "programs/tiny-malloc.c",
+            "programs/infinite_loop.S",
+            "-DDEFINE_MALLOC",
+            "-DDEFINE_FREE"
+        )
+
+        cmd.append(self.infinite_loop)
+
+        self.logfile = tempfile.NamedTemporaryFile(
+            prefix="cclass-",
+            suffix=".log"
+        )
+
+        logname = self.logfile.name
+        self.lognames = [logname]
+
+        if print_log_names:
+            real_stdout.write(f"Temporary cclass log: {logname}\n")
+
+        self.logfile.write(("+ " + " ".join(cmd) + "\n").encode())
+        self.logfile.flush()
+
+        self.process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=self.logfile,
+            stderr=self.logfile
+        )
+
+        if with_jtag_gdb:
+            self.port = None
+
+            start = time.time()
+
+            while time.time() - start < 60:
+
+                # Simulator exited unexpectedly
+                if self.process.poll() is not None:
+                    print_log(logname)
+                    raise TestLibError(
+                        f"Cclass exited unexpectedly with code {self.process.returncode}"
+                    )
+
+                with open(logname, encoding="utf-8") as fd:
+                    data = fd.read()
+
+                m = re.search(
+                    r"Listening for remote bitbang connection on port (\d+)\.",
+                    data
+                )
+
+                if m:
+                    self.port = int(m.group(1))
+                    os.environ["REMOTE_BITBANG_PORT"] = m.group(1)
+                    break
+
+                time.sleep(0.1)
+
+            if self.port is None:
+                print_log(logname)
+                raise TestLibError(
+                    "Timed out waiting for Cclass Remote Bitbang server."
+                )
+
+    # pylint: disable=too-many-branches
+    def command(self, target, halted, timeout, with_jtag_gdb):
+        cmd = ["./out"]
+
+        if timeout:
+            cmd = ["timeout", str(timeout)] + cmd
+
+        if with_jtag_gdb:
+            os.environ["REMOTE_BITBANG_HOST"] = "localhost"
+
+        return cmd
+
+    def __del__(self):
+        try:
+            if self.process:
+                self.process.kill()
+                self.process.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+        try:
+            self.logfile.close()
+        except Exception:
+            pass
+
+    def wait(self, *args, **kwargs):
+        return self.process.wait(*args, **kwargs)
+
+class Iclass:
+    # pylint: disable=too-many-instance-attributes
+    # pylint: disable=too-many-locals
+    def __init__(self, target, halted=False, timeout=None, with_jtag_gdb=True,
+            isa=None, progbufsize=None, dmi_rti=None, abstract_rti=None,
+            support_hasel=True, support_abstract_csr=True,
+            support_haltgroups=True, vlen=128, elen=64, harts=None):
+        """Launch iclass. Return tuple of its process and the port it's running
+        on."""
+        self.process = None
+        self.isa = isa
+        self.progbufsize = progbufsize
+        self.dmi_rti = dmi_rti
+        self.abstract_rti = abstract_rti
+        self.support_abstract_csr = support_abstract_csr
+        self.support_hasel = support_hasel
+        self.support_haltgroups = support_haltgroups
+        self.vlen = vlen
+        self.elen = elen
+
+        self.harts = harts or target.harts or [target]
+
+        cmd = self.command(target, halted, timeout, with_jtag_gdb)
+        self.infinite_loop = target.compile(self.harts[0],
+                "programs/checksum.c", "programs/tiny-malloc.c",
+                "programs/infinite_loop.S", "-DDEFINE_MALLOC", "-DDEFINE_FREE")
+        cmd.append(self.infinite_loop)
+        # pylint: disable-next=consider-using-with
+        self.logfile = tempfile.NamedTemporaryFile(prefix="iclass64-",
+                suffix=".log")
+        logname = self.logfile.name
+        self.lognames = [logname]
+        if print_log_names:
+            real_stdout.write("Temporary iclass64 log: {logname}\n")
+        self.logfile.write(("+ " + " ".join(cmd) + "\n").encode())
+        self.logfile.flush()
+        # pylint: disable-next=consider-using-with
+        if len(sim_flag)==0:
+           self.process = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                stdout=self.logfile, stderr=self.logfile)
+        sim_flag.append(True)
+        if with_jtag_gdb:
+            self.port = None
+            for _ in range(30):
+                with open(logname, encoding='utf-8') as fd:
+                    m = re.search(r"Listening for remote bitbang connection on "
+                            r"port (\d+).", fd.read())
+                if m:
+                    self.port = int(m.group(1))
+                    os.environ['REMOTE_BITBANG_PORT'] = m.group(1)
+                    break
+                time.sleep(0.11)
+            if not self.port:
+                print_log(logname)
+                raise Exception("Didn't get iclass message about bitbang "
+                        "connection")
+
+    # pylint: disable=too-many-branches
+    def command(self, target, halted, timeout, with_jtag_gdb):
+        # pylint: disable=no-self-use
+        cmd = ["./out"]
+
+        if with_jtag_gdb:
+        #    cmd += ['--rbb-port', '0']
             os.environ['REMOTE_BITBANG_HOST'] = 'localhost'
 
         return cmd
@@ -315,7 +515,9 @@ class Openocd:
         if server_cmd:
             cmd = shlex.split(server_cmd)
         else:
-            cmd = ["openocd"]
+            cmd = ["./openocd"]
+            if debug:
+                cmd.append("-d")
 
         # This command needs to come before any config scripts on the command
         # line, since they are executed in order.
@@ -429,6 +631,7 @@ class Openocd:
 
     def __del__(self):
         try:
+            sim_flag.clear()
             self.process.terminate()
             start = time.time()
             while time.time() < start + 10:
@@ -721,14 +924,15 @@ class Gdb:
             97, 193, 157, 3, 29, 79, 113, 5, 89, 19, 37, 71, 179, 59, 137, 53)
 
     # pylint: disable=too-many-positional-arguments
-    def __init__(self, target, ports, cmd=None, timeout=60, binaries=None,
+    def __init__(self, target, ports, cmd=None, timeout=10000, binaries=None,
                  logremote=False):
         assert ports
 
+        print("gdb is live.")
         self.target = target
         self.ports = ports
         self.cmd = cmd
-        self.timeout = timeout
+        self.timeout = 10000
         self.binaries = binaries or [None] * len(ports)
 
         self.reset_delay_index = 0
@@ -746,6 +950,7 @@ class Gdb:
                 real_stdout.write(f"Temporary gdb log: {logfile.name}\n")
             child = pexpect.spawn(self.cmd)
             child.logfile = logfile
+            child.timeout = 10000
             child.logfile.write(f"+ {self.cmd}\n".encode())
             self.children.append(child)
             self.select_child(child)
@@ -756,7 +961,8 @@ class Gdb:
             self.command("set height 0", reset_delays=None)
             # Force consistency.
             self.command("set print entry-values no", reset_delays=None)
-            self.command(f"set remotetimeout {self.timeout}", reset_delays=None)
+            self.command(f"set remotetimeout unlimited", reset_delays=None)
+            self.command(f"set remotetimeout unlimited")
             if logremote:
                 # pylint: disable-next=consider-using-with
                 remotelog = tempfile.NamedTemporaryFile(
@@ -1020,10 +1226,19 @@ class Gdb:
         return self.active_child.expect(text, timeout=ops * self.timeout)
 
     def load(self):
+        # try loading once
         output = self.system_command("load", ops=1000)
-        assert "failed" not in  output
+        assert "failed" not in output
         assert "Transfer rate" in output
         output = self.system_command("compare-sections", ops=1000)
+
+        # if load doesn't go through, keep trying until it does
+        while "MIS" in output:
+            output = self.system_command("load", ops=1000)
+            assert "failed" not in  output
+            assert "Transfer rate" in output
+            output = self.system_command("compare-sections", ops=1000)
+
         assert "matched" in output
         assert "MIS" not in output
 
