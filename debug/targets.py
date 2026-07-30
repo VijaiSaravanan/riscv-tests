@@ -23,7 +23,7 @@ class Hart:
     # this value set to False are not compliant with the spec (but still usable
     # as long as running code doesn't try to mess with triggers set by an
     # external debugger).
-    honors_tdata1_hmode = True
+    honors_tdata1_dmode = True
 
     # Address where a r/w/x block of RAM starts, together with its size.
     ram = None
@@ -147,6 +147,21 @@ class Target:
 
     # Support set_pmp_deny to create invalid addresses.
     support_set_pmp_deny = False
+
+    # Supports an address/data match trigger of type 2
+    support_mcontrol = True
+
+    # Supports an address/data match trigger of type 6
+    support_mcontrol6 = True
+
+    # Supports Instruction count trigger
+    support_icount = True
+
+    # Supports interrupt trigger
+    support_itrigger = True
+
+    # Supports exception trigger
+    support_etrigger = True
 
     # Internal variables:
     directory = None
