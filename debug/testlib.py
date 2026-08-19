@@ -936,7 +936,7 @@ class Gdb:
         self.target = target
         self.ports = ports
         self.cmd = cmd
-        self.timeout = 10000
+        self.timeout = timeout
         self.binaries = binaries or [None] * len(ports)
 
         self.reset_delay_index = 0

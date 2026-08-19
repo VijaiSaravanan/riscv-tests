@@ -110,6 +110,9 @@ class InfoTest(GdbTest):
                     r"keep_alive.. was not invoked in the \d+ ms timelimit.",
                     line):
                 continue
+            parts = line.split()
+            if len(parts) !=2:
+                continue
             k, v = line.strip().split()
             info[k] = v
         assertEqual(int(info.get("hart.xlen")), self.hart.xlen)
